@@ -1,7 +1,26 @@
 import logging
+import os
 import random
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+
+
+class _PingHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, *args):
+        pass
+
+
+def _run_ping_server():
+    port = int(os.environ.get("PORT", 10000))
+    HTTPServer(("", port), _PingHandler).serve_forever()
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -732,6 +751,7 @@ async def show_detailed_answers(query, user_id):
 
 
 def main():
+    threading.Thread(target=_run_ping_server, daemon=True).start()
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
