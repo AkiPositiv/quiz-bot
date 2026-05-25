@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, PicklePersistence
+from telegram.error import Conflict
 
 
 class _PingHandler(BaseHTTPRequestHandler):
@@ -749,14 +750,21 @@ def main():
     persistence = PicklePersistence(filepath="bot_persistence.pkl")
     app = Application.builder().token(BOT_TOKEN).persistence(persistence).build()
 
+    async def conflict_handler(update, context):
+        if isinstance(context.error, Conflict):
+            logger.warning("Conflict: another instance is running, waiting...")
+        else:
+            raise context.error
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(choose_category, pattern=r"^cat_"))
     app.add_handler(CallbackQueryHandler(choose_mode, pattern=r"^mode_"))
     app.add_handler(CallbackQueryHandler(answer_question, pattern=r"^ans_"))
     app.add_handler(CallbackQueryHandler(handle_callback, pattern=r"^(menu|next_question|show_results_now|restart_20|restart_100|show_answers)$"))
+    app.add_error_handler(conflict_handler)
 
     logger.info("Bot started")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
