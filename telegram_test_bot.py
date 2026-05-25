@@ -5,7 +5,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, PicklePersistence
 
 
 class _PingHandler(BaseHTTPRequestHandler):
@@ -35,8 +35,6 @@ CATEGORY_NAMES = {
     "visual": "🎨 Визуальные языки и цвета",
     "variables": "🔢 Переменные и синтаксис",
 }
-
-user_data = {}
 
 QUESTIONS_DATABASE = {
     "languages": [
@@ -515,8 +513,7 @@ def get_mode_keyboard():
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_data[user_id] = {}
+    context.user_data.clear()
     await update.message.reply_text(
         "👋 <b>Добро пожаловать в Quiz Bot!</b>\n\nВыберите категорию для тестирования:",
         parse_mode="HTML",
@@ -524,7 +521,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def show_menu(query):
+async def show_menu(query, context):
+    context.user_data.clear()
     await query.edit_message_text(
         "🏠 <b>Главное меню</b>\n\nВыберите категорию:",
         parse_mode="HTML",
@@ -535,10 +533,10 @@ async def show_menu(query):
 async def choose_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user_id = query.from_user.id
     category = query.data[4:]  # strip "cat_"
 
-    user_data[user_id] = {"category": category}
+    context.user_data.clear()
+    context.user_data["category"] = category
     cat_name = CATEGORY_NAMES[category]
 
     await query.edit_message_text(
@@ -551,29 +549,25 @@ async def choose_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def choose_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user_id = query.from_user.id
     mode = int(query.data[5:])  # strip "mode_"
 
-    category = user_data[user_id]["category"]
-    if mode == 20:
-        questions_to_ask = random.sample(list(range(100)), 20)
-    else:
-        questions_to_ask = list(range(100))
+    category = context.user_data.get("category", "languages")
+    questions_to_ask = random.sample(list(range(100)), 20) if mode == 20 else list(range(100))
 
-    user_data[user_id] = {
+    context.user_data.update({
         "category": category,
         "mode": mode,
         "questions_to_ask": questions_to_ask,
         "current_question": 0,
         "score": 0,
         "answers": [],
-    }
+    })
 
-    await send_question(query, user_id)
+    await send_question(query, context)
 
 
-async def send_question(query, user_id):
-    data = user_data[user_id]
+async def send_question(query, context):
+    data = context.user_data
     idx = data["current_question"]
     q_idx = data["questions_to_ask"][idx]
     total = len(data["questions_to_ask"])
@@ -597,13 +591,15 @@ async def send_question(query, user_id):
 async def answer_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user_id = query.from_user.id
 
-    if user_id not in user_data or "questions_to_ask" not in user_data[user_id]:
-        await query.edit_message_text("Сессия устарела. Нажмите /start для начала.")
+    if "questions_to_ask" not in context.user_data:
+        await query.edit_message_text(
+            "Сессия не найдена. Нажмите /start для начала.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("▶️ Старт", callback_data="menu")]]),
+        )
         return
 
-    data = user_data[user_id]
+    data = context.user_data
     ans = int(query.data[4:])  # strip "ans_"
     idx = data["current_question"]
     q_idx = data["questions_to_ask"][idx]
@@ -644,49 +640,47 @@ async def answer_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user_id = query.from_user.id
     cb = query.data
 
     if cb == "menu":
-        user_data[user_id] = {}
-        await show_menu(query)
+        await show_menu(query, context)
 
     elif cb == "next_question":
-        await send_question(query, user_id)
+        await send_question(query, context)
 
     elif cb == "show_results_now":
-        await show_results(query, user_id)
+        await show_results(query, context)
 
     elif cb == "restart_20":
-        category = user_data[user_id].get("category", "languages")
-        user_data[user_id] = {
+        category = context.user_data.get("category", "languages")
+        context.user_data.update({
             "category": category,
             "mode": 20,
             "questions_to_ask": random.sample(list(range(100)), 20),
             "current_question": 0,
             "score": 0,
             "answers": [],
-        }
-        await send_question(query, user_id)
+        })
+        await send_question(query, context)
 
     elif cb == "restart_100":
-        category = user_data[user_id].get("category", "languages")
-        user_data[user_id] = {
+        category = context.user_data.get("category", "languages")
+        context.user_data.update({
             "category": category,
             "mode": 100,
             "questions_to_ask": list(range(100)),
             "current_question": 0,
             "score": 0,
             "answers": [],
-        }
-        await send_question(query, user_id)
+        })
+        await send_question(query, context)
 
     elif cb == "show_answers":
-        await show_detailed_answers(query, user_id)
+        await show_detailed_answers(query, context)
 
 
-async def show_results(query, user_id):
-    data = user_data[user_id]
+async def show_results(query, context):
+    data = context.user_data
     score = data["score"]
     total = len(data["questions_to_ask"])
     cat_name = CATEGORY_NAMES[data["category"]]
@@ -724,8 +718,8 @@ async def show_results(query, user_id):
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 
-async def show_detailed_answers(query, user_id):
-    data = user_data[user_id]
+async def show_detailed_answers(query, context):
+    data = context.user_data
     answers = data["answers"]
     lines = ["📝 <b>Разбор ответов:</b>\n"]
 
@@ -752,7 +746,8 @@ async def show_detailed_answers(query, user_id):
 
 def main():
     threading.Thread(target=_run_ping_server, daemon=True).start()
-    app = Application.builder().token(BOT_TOKEN).build()
+    persistence = PicklePersistence(filepath="bot_persistence.pkl")
+    app = Application.builder().token(BOT_TOKEN).persistence(persistence).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(choose_category, pattern=r"^cat_"))
